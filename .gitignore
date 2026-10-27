@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm-cache/
+.corepack/
+
+# Build outputs
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+
+# Logs
+*.log
+outputs/
+work/
+
+# Generated
+.codex/
+.agents/
+
+# Large generated files
+tree_output.txt
+file_list.txt
+api_file_list.txt
+
+package-lock.json
+apps/web/refactor-colors.js
+apps/web/refactor-light.js
+apps/web/fix-regex.js

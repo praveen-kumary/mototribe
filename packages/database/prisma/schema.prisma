@@ -1,0 +1,885 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum UserRole {
+  RIDER
+  SELLER
+  ADMIN
+}
+
+enum SellerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum OrderStatus {
+  CREATED
+  PAYMENT_PENDING
+  PAYMENT_FAILED
+  PAYMENT_SUCCESS
+  CONFIRMED
+  PACKING
+  READY_TO_SHIP
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURN_REQUESTED
+  RETURN_APPROVED
+  RETURN_PICKED
+  RETURN_COMPLETED
+  REFUND_PENDING
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum ReservationStatus {
+  PENDING
+  COMMITTED
+  EXPIRED
+}
+
+// ─── User ────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String?
+  avatar       String?
+  role         UserRole  @default(RIDER)
+  xp           Int       @default(0)
+  level        Int       @default(1)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  // Seller-specific
+  sellerStatus SellerStatus?
+  storeName    String?
+  storeSlug    String?       @unique
+
+  // Relations
+  garage           Garage?
+  posts            Post[]
+  reviews          Review[]
+  comments         Comment[]
+  orders           Order[]             @relation("BuyerOrders")
+  sellerOrders     SellerOrder[]       @relation("SellerChildOrders")
+  products         Product[]
+  addresses        Address[]
+  wishlist         Wishlist[]
+  garageBikes      GarageBike[]
+  notifications    Notification[]
+  rideRsvps        RideRSVP[]
+  threadsBuyer     ChatThread[]        @relation("BuyerThreads")
+  threadsSeller    ChatThread[]        @relation("SellerThreads")
+  payouts          Payout[]            @relation("SellerPayouts")
+  campaigns        MarketingCampaign[] @relation("SellerCampaigns")
+  shipping         ShippingProfile[]   @relation("SellerShipping")
+  messages         ChatMessage[]
+  upvotes          PostUpvote[]
+  checkoutSessions CheckoutSession[]
+  disputesBuyer    Dispute[]           @relation("BuyerDisputes")
+  disputesSeller   Dispute[]           @relation("SellerDisputes")
+  couponsSeller    Coupon[]            @relation("SellerCoupons")
+
+  // Phase 3
+  events             Event[]           @relation("SellerEvents")
+  articles           BlogArticle[]     @relation("AuthorArticles")
+  creatorProfile     CreatorProfile?
+  garageVehicles     GarageVehicle[]   @relation("UserGarage")
+  createdCommunities Community[]       @relation("CommunityCreator")
+  postBookmarks      PostBookmark[]
+  memberships        CommunityMember[]
+
+  // Phase 4
+  systemLogs    SystemLog[]
+  rolesAssigned UserRoleAssignment[]
+}
+
+// ─── Address ─────────────────────────────────────────────
+
+model Address {
+  id        String  @id @default(cuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  label     String
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String
+  phone     String
+  isDefault Boolean @default(false)
+
+  orders Order[]
+
+  deletedAt DateTime?
+
+  @@index([userId])
+}
+
+// ─── Bike Catalog ────────────────────────────────────────
+
+model BikeMake {
+  id     String      @id @default(cuid())
+  name   String      @unique
+  models BikeModel[]
+}
+
+model BikeModel {
+  id       String   @id @default(cuid())
+  makeId   String
+  make     BikeMake @relation(fields: [makeId], references: [id], onDelete: Cascade)
+  name     String
+  yearFrom Int
+  yearTo   Int?
+
+  fitments      ProductFitment[]
+  garageEntries GarageBike[]
+
+  @@unique([makeId, name, yearFrom])
+  @@index([makeId])
+}
+
+// ─── Garage ──────────────────────────────────────────────
+
+model Garage {
+  id     String       @id @default(cuid())
+  userId String       @unique
+  user   User         @relation(fields: [userId], references: [id])
+  bikes  GarageBike[]
+}
+
+model GarageBike {
+  id          String    @id @default(cuid())
+  garageId    String
+  garage      Garage    @relation(fields: [garageId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  bikeModelId String
+  bikeModel   BikeModel @relation(fields: [bikeModelId], references: [id])
+  year        Int
+  nickname    String?
+  odometerKm  Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  serviceLogs ServiceLog[]
+
+  @@index([garageId])
+  @@index([userId])
+}
+
+model ServiceLog {
+  id           String     @id @default(cuid())
+  garageBikeId String
+  garageBike   GarageBike @relation(fields: [garageBikeId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?
+  odometerKm   Int
+  date         DateTime
+  createdAt    DateTime   @default(now())
+
+  @@index([garageBikeId])
+}
+
+// ─── Products & Inventory ────────────────────────────────
+
+model Product {
+  id           String  @id @default(cuid())
+  sellerId     String
+  seller       User    @relation(fields: [sellerId], references: [id])
+  name         String
+  slug         String  @unique
+  description  String  @db.Text
+  price        Int // Stored in paise/cents
+  comparePrice Int?
+  costPrice    Int?
+  sku          String?
+  barcode      String?
+  weight       String?
+
+  // Inventory (Enterprise pattern)
+  stock          Int @default(0)
+  reservedStock  Int @default(0)
+  availableStock Int @default(0)
+  damagedStock   Int @default(0)
+  returnedStock  Int @default(0)
+  incomingStock  Int @default(0)
+  blockedStock   Int @default(0)
+
+  status          ProductStatus @default(DRAFT)
+  category        String?
+  tags            String[]
+  metaTitle       String?
+  metaDescription String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  images       ProductImage[]
+  fitments     ProductFitment[]
+  reviews      Review[]
+  wishlist     Wishlist[]
+  orderItems   OrderItem[]
+  reservations InventoryReservation[]
+
+  @@index([sellerId])
+  @@index([category])
+  @@index([status])
+}
+
+model InventoryReservation {
+  id        String            @id @default(cuid())
+  productId String
+  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderId   String? // Linked to parent order once created
+  quantity  Int
+  expiresAt DateTime
+  status    ReservationStatus @default(PENDING)
+  createdAt DateTime          @default(now())
+
+  @@index([productId])
+  @@index([expiresAt])
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  alt       String?
+  sortOrder Int     @default(0)
+
+  @@index([productId])
+}
+
+model ProductFitment {
+  productId   String
+  bikeModelId String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  bikeModel   BikeModel @relation(fields: [bikeModelId], references: [id], onDelete: Cascade)
+  notes       String?
+
+  @@id([productId, bikeModelId])
+}
+
+// ─── Wishlist ────────────────────────────────────────────
+
+model Wishlist {
+  userId    String
+  productId String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, productId])
+}
+
+// ─── Orders (Multi-Seller Structure) ─────────────────────
+
+model Order {
+  id      String @id @default(cuid())
+  buyerId String
+  buyer   User   @relation("BuyerOrders", fields: [buyerId], references: [id])
+
+  // Aggregated totals across all sellers
+  totalAmount   Int
+  shippingTotal Int @default(0)
+  taxTotal      Int @default(0)
+  grandTotal    Int
+
+  status            OrderStatus @default(CREATED)
+  shippingAddressId String?
+  shippingAddress   Address?    @relation(fields: [shippingAddressId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sellerOrders  SellerOrder[]
+  paymentIntent PaymentIntent?
+  auditLogs     OrderAuditLog[]
+  disputes      Dispute[]
+
+  @@index([buyerId])
+}
+
+model SellerOrder {
+  id            String @id @default(cuid())
+  parentOrderId String
+  parentOrder   Order  @relation(fields: [parentOrderId], references: [id])
+  sellerId      String
+  seller        User   @relation("SellerChildOrders", fields: [sellerId], references: [id])
+
+  // Totals specific to this seller
+  subtotal     Int
+  shippingFee  Int @default(0)
+  taxAmount    Int @default(0)
+  platformFee  Int @default(0)
+  sellerPayout Int
+
+  status         OrderStatus @default(CREATED)
+  trackingNumber String?
+  courierName    String?
+
+  items     OrderItem[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([parentOrderId])
+  @@index([sellerId])
+}
+
+model OrderItem {
+  id            String      @id @default(cuid())
+  sellerOrderId String
+  sellerOrder   SellerOrder @relation(fields: [sellerOrderId], references: [id])
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+
+  name     String
+  price    Int // Price at time of purchase
+  quantity Int
+  image    String?
+
+  @@index([sellerOrderId])
+  @@index([productId])
+}
+
+model OrderAuditLog {
+  id         String   @id @default(cuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id])
+  fromStatus String?
+  toStatus   String
+  reason     String?
+  changedBy  String // userId or "SYSTEM"
+  createdAt  DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// ─── Payments ────────────────────────────────────────────
+
+model PaymentIntent {
+  id              String        @id @default(cuid())
+  orderId         String        @unique
+  order           Order         @relation(fields: [orderId], references: [id])
+  amount          Int
+  currency        String        @default("INR")
+  status          PaymentStatus @default(PENDING)
+  provider        String // e.g., "RAZORPAY", "STRIPE"
+  providerOrderId String?       @unique
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  transactions PaymentTransaction[]
+}
+
+model PaymentTransaction {
+  id                    String        @id @default(cuid())
+  paymentIntentId       String
+  paymentIntent         PaymentIntent @relation(fields: [paymentIntentId], references: [id])
+  providerTransactionId String        @unique // For idempotency
+  amount                Int
+  status                PaymentStatus
+  metadata              Json? // Store raw webhook payload
+  createdAt             DateTime      @default(now())
+
+  @@index([paymentIntentId])
+}
+
+model LedgerEntry {
+  id          String   @id @default(cuid())
+  orderId     String?
+  type        String // DEBIT, CREDIT, REFUND, SETTLEMENT, ADJUSTMENT
+  amount      Int
+  description String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([orderId, type])
+  @@index([createdAt])
+}
+
+model CheckoutSession {
+  id             String   @id @default(cuid())
+  buyerId        String
+  buyer          User     @relation(fields: [buyerId], references: [id])
+  orderId        String?
+  status         String   @default("PENDING") // PENDING, COMPLETED, EXPIRED, FAILED
+  idempotencyKey String   @unique
+  totalAmount    Int
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([buyerId])
+  @@index([orderId])
+}
+
+// ─── Community ───────────────────────────────────────────
+
+model Community {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String
+  creatorId   String?
+  creator     User?   @relation("CommunityCreator", fields: [creatorId], references: [id])
+
+  posts   Post[]
+  rules   CommunityRule[]
+  members CommunityMember[]
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+}
+
+model CommunityRule {
+  id          String    @id @default(cuid())
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  title       String
+  description String    @db.Text
+  createdAt   DateTime  @default(now())
+
+  @@index([communityId])
+}
+
+model CommunityMember {
+  userId      String
+  communityId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  role        String    @default("MEMBER") // MEMBER, MODERATOR, ADMIN
+  joinedAt    DateTime  @default(now())
+
+  @@id([userId, communityId])
+}
+
+model Post {
+  id          String    @id @default(cuid())
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id])
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id])
+  title       String
+  body        String    @db.Text
+  score       Int       @default(0)
+  isDraft     Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  comments  Comment[]
+  upvotes   PostUpvote[]
+  bookmarks PostBookmark[]
+
+  @@index([communityId])
+  @@index([authorId])
+  @@index([score])
+}
+
+model PostUpvote {
+  userId String
+  postId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+}
+
+model PostBookmark {
+  userId    String
+  postId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, postId])
+}
+
+model Comment {
+  id        String    @id @default(cuid())
+  postId    String
+  post      Post      @relation(fields: [postId], references: [id])
+  authorId  String
+  author    User      @relation(fields: [authorId], references: [id])
+  body      String    @db.Text
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([postId])
+}
+
+// ─── Reviews ─────────────────────────────────────────────
+
+model Review {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  rating    Int
+  body      String   @db.Text
+  status    String   @default("APPROVED") // PENDING, APPROVED, REJECTED
+  createdAt DateTime @default(now())
+
+  @@unique([productId, userId])
+  @@index([productId])
+  @@index([status])
+}
+
+// ─── Chat ────────────────────────────────────────────────
+
+model ChatThread {
+  id          String        @id @default(cuid())
+  buyerId     String
+  buyer       User          @relation("BuyerThreads", fields: [buyerId], references: [id])
+  sellerId    String
+  seller      User          @relation("SellerThreads", fields: [sellerId], references: [id])
+  subject     String
+  lastUpdated DateTime      @default(now())
+  messages    ChatMessage[]
+
+  @@index([buyerId])
+  @@index([sellerId])
+}
+
+model ChatMessage {
+  id        String     @id @default(cuid())
+  threadId  String
+  thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User       @relation(fields: [senderId], references: [id])
+  text      String     @db.Text
+  createdAt DateTime   @default(now())
+
+  @@index([threadId])
+}
+
+// ─── Rides ───────────────────────────────────────────────
+
+model Ride {
+  id          String     @id @default(cuid())
+  name        String
+  description String?    @db.Text
+  date        DateTime
+  location    String
+  creatorId   String
+  rsvps       RideRSVP[]
+  createdAt   DateTime   @default(now())
+
+  @@index([date])
+}
+
+model RideRSVP {
+  userId String
+  rideId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ride   Ride   @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  @@id([userId, rideId])
+}
+
+// ─── Notifications ───────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+// ─── Outbox Pattern ──────────────────────────────────────
+
+model OutboxEvent {
+  id             String    @id @default(cuid())
+  type           String // e.g., "order.created"
+  payload        Json
+  status         String    @default("PENDING") // PENDING, PROCESSED, FAILED
+  error          String?   @db.Text
+  retryCount     Int       @default(0)
+  nextRetryAt    DateTime?
+  leaseUntil     DateTime?
+  processingNode String?
+  processedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, nextRetryAt])
+}
+
+// ─── Business Rule Engine ────────────────────────────────
+
+model CommissionRule {
+  id         String   @id @default(cuid())
+  sellerTier String // e.g., "STANDARD", "PREMIUM", "BRAND"
+  category   String // e.g., "ALL", "HELMETS", "EXHAUSTS"
+  percentage Float // e.g., 8.0 for 8%
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([sellerTier, category])
+}
+
+model PlatformConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── Audit Trail ─────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String // The user/admin ID who performed the action
+  action    String // e.g., "PRODUCT_PRICE_UPDATED", "REFUND_APPROVED"
+  entityId  String // ID of the affected record
+  entity    String // "Product", "Order", "Seller"
+  changes   Json // { before: {...}, after: {...} }
+  createdAt DateTime @default(now())
+
+  @@index([entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+// ─── Disputes ────────────────────────────────────────────
+
+model Dispute {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  buyerId   String
+  buyer     User     @relation("BuyerDisputes", fields: [buyerId], references: [id])
+  sellerId  String
+  seller    User     @relation("SellerDisputes", fields: [sellerId], references: [id])
+  reason    String
+  status    String   @default("OPEN") // OPEN, IN_REVIEW, AWAITING_RESPONSE, RESOLVED, CLOSED
+  amount    Int // The disputed amount in paise
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([buyerId])
+  @@index([sellerId])
+}
+
+// ─── Coupons & Offers ────────────────────────────────────
+
+model Coupon {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  sellerId    String? // If null, it's a global admin coupon
+  seller      User?     @relation("SellerCoupons", fields: [sellerId], references: [id])
+  type        String // PERCENTAGE, FIXED_AMOUNT, FREE_SHIPPING
+  value       Int // e.g. 10 for 10%, or 50000 for Rs. 500.00
+  minOrderVal Int? // Minimum order value in paise
+  maxDiscount Int? // Maximum discount in paise (for percentage)
+  usageLimit  Int? // Total number of times this can be used
+  usedCount   Int       @default(0)
+  validFrom   DateTime?
+  validUntil  DateTime?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@index([code])
+  @@index([sellerId])
+}
+
+// ─── Phase 2: Operations & Payouts ───────────────────────
+
+model Payout {
+  id          String    @id @default(cuid())
+  sellerId    String
+  seller      User      @relation("SellerPayouts", fields: [sellerId], references: [id])
+  amount      Int // in paise
+  status      String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  reference   String? // Bank reference number
+  bankDetails Json? // Snapshot of bank details at time of payout
+  requestedAt DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([sellerId])
+  @@index([status])
+}
+
+model MarketingCampaign {
+  id          String    @id @default(cuid())
+  sellerId    String? // null if platform-wide
+  seller      User?     @relation("SellerCampaigns", fields: [sellerId], references: [id])
+  title       String
+  description String?
+  type        String // BANNER, SPONSORED_PRODUCT, EMAIL_BLAST
+  targetUrl   String?
+  budget      Int // in paise
+  spent       Int       @default(0)
+  status      String    @default("DRAFT") // DRAFT, ACTIVE, PAUSED, COMPLETED
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([sellerId])
+  @@index([status])
+}
+
+model ShippingProfile {
+  id                    String   @id @default(cuid())
+  sellerId              String? // null if platform default
+  seller                User?    @relation("SellerShipping", fields: [sellerId], references: [id])
+  name                  String
+  baseRate              Int // in paise
+  perKgRate             Int // in paise
+  freeShippingThreshold Int? // in paise
+  regions               String[] // e.g. ["IN-MH", "IN-KA"] or ["ALL"]
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now())
+
+  @@index([sellerId])
+}
+
+// ─── Phase 3: Community & Content ────────────────────────
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String   @db.Text
+  date        DateTime
+  location    String
+  sellerId    String? // null if platform event
+  seller      User?    @relation("SellerEvents", fields: [sellerId], references: [id])
+  status      String   @default("UPCOMING") // UPCOMING, ONGOING, COMPLETED, CANCELLED
+  bannerImage String?
+  createdAt   DateTime @default(now())
+
+  @@index([sellerId])
+  @@index([date])
+}
+
+model BlogArticle {
+  id          String    @id @default(cuid())
+  title       String
+  slug        String    @unique
+  content     String    @db.Text
+  authorId    String
+  author      User      @relation("AuthorArticles", fields: [authorId], references: [id])
+  status      String    @default("DRAFT") // DRAFT, PUBLISHED, ARCHIVED
+  coverImage  String?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([authorId])
+  @@index([status])
+}
+
+model CreatorProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  bio       String?  @db.Text
+  platforms Json? // e.g. { youtube: "url", instagram: "url" }
+  status    String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt DateTime @default(now())
+}
+
+model GarageVehicle {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("UserGarage", fields: [userId], references: [id])
+  make      String
+  model     String
+  year      Int
+  mods      String?  @db.Text // Description of modifications
+  images    String[]
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─── Phase 4: Analytics & System Core ──────────────────────
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  details   Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+}
+
+model Role {
+  id          String               @id @default(cuid())
+  name        String               @unique
+  description String?
+  permissions Permission[]
+  users       UserRoleAssignment[]
+  createdAt   DateTime             @default(now())
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g. "MANAGE_USERS", "VIEW_ANALYTICS"
+  description String?
+  roles       Role[]
+  createdAt   DateTime @default(now())
+}
+
+model UserRoleAssignment {
+  userId     String
+  roleId     String
+  user       User     @relation(fields: [userId], references: [id])
+  role       Role     @relation(fields: [roleId], references: [id])
+  assignedAt DateTime @default(now())
+
+  @@id([userId, roleId])
+}
+
+model PlatformSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+  updatedAt   DateTime @updatedAt
+}

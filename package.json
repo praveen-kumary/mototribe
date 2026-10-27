@@ -1,0 +1,22 @@
+{
+  "name": "rideroom",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "format": "prettier --write .",
+    "db:generate": "pnpm --filter @rideroom/database generate",
+    "db:migrate": "pnpm --filter @rideroom/database migrate",
+    "db:push": "pnpm --filter @rideroom/database push",
+    "test": "pnpm --filter @rideroom/api test:e2e",
+    "test:e2e": "pnpm --filter @rideroom/api test:e2e"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3",
+    "turbo": "^2.4.4",
+    "typescript": "^5.8.2"
+  }
+}
